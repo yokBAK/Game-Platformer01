@@ -8,23 +8,23 @@ public class PlayerController : MonoBehaviour
     [Header("References")]
     public MicInputManager micManager;
     public Slider micProgressBar;
-    public Transform groundCheck;      // ลาก Object GroundCheck มาใส่
-    public LayerMask groundLayer;      // เลือก Layer "Ground"
+    public Transform groundCheck;      // จุดเช็คพื้นที่เท้า
+    public LayerMask groundLayer;      // Layer ที่เป็นพื้น
 
     [Header("Movement Settings")]
     public float moveSpeed = 5f;
 
     [Header("Mic Jump Settings")]
-    public float sensitivity = 100f;
-    public float loudnessThreshold = 0.5f;
-    public float jumpForce = 10f;
-    public float checkRadius = 0.2f;   // รัศมีในการเช็คพื้น
+    public float sensitivity = 100f;       // ตัวคูณขยายเสียง
+    public float loudnessThreshold = 0.5f; // ค่าที่เริ่มกระโดด (ครึ่งหลอด)
+    public float jumpForce = 10f;          // แรงกระโดดพื้นฐาน
+    public float checkRadius = 0.2f;       // รัศมีวงกลมเช็คพื้น
 
     private Rigidbody2D rb;
     private PlayerInputActions inputActions;
     private Vector2 moveInput;
-    private bool isGrounded;           // ตัวแปรเช็คว่าอยู่ที่พื้นไหม
-    private bool isDead = false;       // ตัวแปรเช็คว่าตายหรือยัง
+    private bool isGrounded;
+    private bool isDead = false;
 
     void Awake()
     {
@@ -37,7 +37,7 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
-        if (isDead) return; // ถ้าตายแล้ว ไม่ต้องทำอะไรต่อ (หยุดการเคลื่อนที่)
+        if (isDead) return;
 
         CheckGroundStatus();
         HandleMovement();
@@ -46,7 +46,6 @@ public class PlayerController : MonoBehaviour
 
     void CheckGroundStatus()
     {
-        // สร้างวงกลมเล็กๆ ที่เท้าเพื่อเช็คว่าชนกับ Layer "Ground" หรือไม่
         isGrounded = Physics2D.OverlapCircle(groundCheck.position, checkRadius, groundLayer);
     }
 
@@ -61,43 +60,37 @@ public class PlayerController : MonoBehaviour
         float rawLoudness = micManager.GetLoudnessFromMic();
         float boostedLoudness = rawLoudness * sensitivity;
 
+        // แสดงผล UI (จำกัดไว้แค่ 0-1 เพื่อไม่ให้หลอดบั๊ก)
         if (micProgressBar != null)
         {
-            micProgressBar.value = boostedLoudness;
+            micProgressBar.value = Mathf.Clamp(boostedLoudness, 0, 1);
         }
 
-        // เงื่อนไข: เสียงต้องดังถึงจุดที่กำหนด AND ต้องอยู่ที่พื้น AND ต้องยังไม่ตาย
-        if (boostedLoudness > loudnessThreshold && isGrounded && !isDead)
+        // เงื่อนไขการกระโดด: ถึงเกณฑ์ 0.5 + อยู่ที่พื้น + ยังไม่ตาย
+        // ปลดล็อคความสูง: ใช้ boostedLoudness จริงคูณแรงกระโดด
+        if (boostedLoudness >= loudnessThreshold && isGrounded && !isDead)
         {
-            Jump();
+            Jump(boostedLoudness);
         }
     }
 
-    void Jump()
+    void Jump(float forceMultiplier)
     {
         rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0);
-        rb.AddForce(Vector2.up * jumpForce, ForceMode2D.Impulse);
+        rb.AddForce(Vector2.up * (jumpForce * forceMultiplier), ForceMode2D.Impulse);
     }
 
     public void Die()
     {
         if (isDead) return;
-
         isDead = true;
 
-        // 1. ปิดระบบฟิสิกส์ปกติและการควบคุม
+        // ท่าตายแบบกวนๆ: เด้งขึ้นแล้วร่วงทะลุพื้น
         rb.linearVelocity = Vector2.zero;
-
-        // 2. ปิด Collider เพื่อให้ร่วงทะลุพื้น (ตกแมพ)
         GetComponent<Collider2D>().enabled = false;
-
-        // 3. ดีดตัวละครขึ้นฟ้าเล็กน้อยก่อนร่วง (Death Jump)
         rb.AddForce(Vector2.up * 8f, ForceMode2D.Impulse);
 
-        Debug.Log("Player Jump-Died!");
-
-        // 4. รอสักครู่ค่อยรีสตาร์ท (เพิ่มเวลาให้นานขึ้นเพื่อให้เห็นท่าตาย)
-        Invoke("RestartLevel", 2.5f);
+        Invoke("RestartLevel", 1.2f);
     }
 
     void RestartLevel()
@@ -105,13 +98,33 @@ public class PlayerController : MonoBehaviour
         SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 
-    // วาดวงกลมเช็คพื้นในหน้า Scene (เพื่อให้เราเห็นว่าจุดเช็คอยู่ตรงไหน)
     private void OnDrawGizmosSelected()
     {
         if (groundCheck != null)
         {
             Gizmos.color = Color.red;
             Gizmos.DrawWireSphere(groundCheck.position, checkRadius);
+        }
+    }
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        if (collision.gameObject.CompareTag("Enemy"))
+        {
+            EnemyPatrol enemy = collision.gameObject.GetComponent<EnemyPatrol>();
+
+            // เช็คว่าเหยียบจากข้างบน และศัตรูตัวนี้ยอมให้เหยียบไหม
+            if (enemy != null && enemy.canBeStomped)
+            {
+                // เช็คตำแหน่ง Y ว่าเท้าเราอยู่สูงกว่าหัวศัตรูไหม
+                if (transform.position.y > collision.transform.position.y + 0.5f)
+                {
+                    enemy.StompDeath(); // เรียกท่าตาย
+
+                    // ให้ตัวผู้เล่นเด้งขึ้น
+                    Rigidbody2D rb = GetComponent<Rigidbody2D>();
+                    if (rb != null) rb.linearVelocity = new Vector2(rb.linearVelocity.x, 10f);
+                }
+            }
         }
     }
 }
